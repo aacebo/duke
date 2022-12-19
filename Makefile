@@ -2,10 +2,10 @@ clean:
 	rm -rf ./bin
 
 build:
-	go build -o bin/main main.go
+	go build -o bin/main lib/main.go
 
 run:
-	go run main.go
+	go run lib/main.go
 
 compile:
 	GOOS=freebsd GOARCH=386 go build -o bin/main-freebsd-386 main.go
