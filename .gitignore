@@ -20,5 +20,10 @@
 # Go workspace file
 go.work
 
-# Misc
+# Build
 bin
+
+# Chromium
+chromium/**/*
+!chromium/BUILD.gn
+!chromium/LICENSE
