@@ -6,28 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"net"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 )
 
 const bufferSize = 4096
-
-var closeCodes map[int]string = map[int]string{
-	1000: "NormalError",
-	1001: "GoingAwayError",
-	1002: "ProtocolError",
-	1003: "UnknownType",
-	1007: "TypeError",
-	1008: "PolicyError",
-	1009: "MessageTooLargeError",
-	1010: "ExtensionError",
-	1011: "UnexpectedError",
-}
 
 type Socket struct {
 	conn   net.Conn
@@ -112,55 +98,6 @@ func (self *Socket) read(size int) ([]byte, error) {
 	return data, nil
 }
 
-func (self *Socket) validate(fr *Frame) error {
-	if !fr.IsMasked {
-		self.status = 1002
-		return errors.New("protocol error: unmasked client frame")
-	}
-
-	if fr.IsControl() && (fr.Length > 125 || fr.IsFragment) {
-		self.status = 1002
-		return errors.New("protocol error: all control frames MUST have a payload length of 125 bytes or less and MUST NOT be fragmented")
-	}
-
-	if fr.IsReserved() {
-		self.status = 1002
-		return errors.New("protocol error: opcode " + fmt.Sprintf("%x", fr.Opcode) + " is reserved")
-	}
-
-	if fr.Reserved > 0 {
-		self.status = 1002
-		return errors.New("protocol error: RSV " + fmt.Sprintf("%x", fr.Reserved) + " is reserved")
-	}
-
-	if fr.Opcode == 1 && !fr.IsFragment && !utf8.Valid(fr.Payload) {
-		self.status = 1007
-		return errors.New("wrong code: invalid UTF-8 text message ")
-	}
-
-	if fr.IsClose() {
-		if fr.Length >= 2 {
-			code := fr.Code()
-			reason := utf8.Valid(fr.Payload[2:])
-
-			if code >= 5000 || (code < 3000 && closeCodes[int(code)] == "") {
-				self.status = 1002
-				return errors.New(closeCodes[1002] + " Wrong Code")
-			}
-
-			if fr.Length > 2 && !reason {
-				self.status = 1007
-				return errors.New(closeCodes[1007] + " invalid UTF-8 reason message")
-			}
-		} else if fr.Length != 0 {
-			self.status = 1002
-			return errors.New(closeCodes[1002] + " Wrong Code")
-		}
-	}
-
-	return nil
-}
-
 // Recv receives data and returns a Frame
 func (self *Socket) Recv() (Frame, error) {
 	frame := Frame{}
@@ -212,7 +149,11 @@ func (self *Socket) Recv() (Frame, error) {
 	}
 
 	frame.Payload = payload
-	err = self.validate(&frame)
+	status, err := frame.Validate(self.status)
+
+	if status != self.status {
+		self.status = status
+	}
 
 	return frame, err
 }
@@ -248,13 +189,9 @@ func (self *Socket) Send(fr Frame) error {
 
 // Close sends close frame and closes the TCP connection
 func (self *Socket) Close() error {
-	f := Frame{}
-	f.Opcode = 8
-	f.Length = 2
-	f.Payload = make([]byte, 2)
-	binary.BigEndian.PutUint16(f.Payload, self.status)
+	f := NewCloseFrame(self.status)
 
-	if err := self.Send(f); err != nil {
+	if err := self.Send(*f); err != nil {
 		return err
 	}
 
