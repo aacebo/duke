@@ -6,11 +6,13 @@ import (
 )
 
 type Server struct {
-	cors func(origin string) bool
+	listeners map[string]func(socket *Socket)
 }
 
-func Listen(r *http.ServeMux, cors func(origin string) bool) *Server {
-	self := Server{cors}
+func New(r *http.ServeMux) *Server {
+	self := Server{
+		listeners: make(map[string]func(socket *Socket)),
+	}
 
 	if r != nil {
 		r.HandleFunc("/ws", self.onHandshake)
@@ -19,6 +21,10 @@ func Listen(r *http.ServeMux, cors func(origin string) bool) *Server {
 	}
 
 	return &self
+}
+
+func (self *Server) On(event string, fn func(socket *Socket)) {
+	self.listeners[event] = fn
 }
 
 func (self *Server) onHandshake(w http.ResponseWriter, r *http.Request) {
@@ -37,6 +43,10 @@ func (self *Server) onHandshake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	defer socket.Close()
+
+	if self.listeners["connection"] != nil {
+		self.listeners["connection"](socket)
+	}
 
 	for {
 		frame, err := socket.Recv()

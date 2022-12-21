@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"unicode/utf8"
 )
 
@@ -94,7 +95,35 @@ func (self *Frame) CloseCode() uint16 {
 	return code
 }
 
-func (self *Frame) Validate(status uint16) (uint16, error) {
+func (self *Frame) Buffer() []byte {
+	data := make([]byte, 2)
+	data[0] = 0x80 | self.Opcode
+
+	if self.IsFragment {
+		data[0] &= 0x7F
+	}
+
+	if self.Length <= 125 {
+		data[1] = byte(self.Length)
+		data = append(data, self.Payload...)
+	} else if self.Length > 125 && float64(self.Length) < math.Pow(2, 16) {
+		data[1] = byte(126)
+		size := make([]byte, 2)
+		binary.BigEndian.PutUint16(size, uint16(self.Length))
+		data = append(data, size...)
+		data = append(data, self.Payload...)
+	} else if float64(self.Length) >= math.Pow(2, 16) {
+		data[1] = byte(127)
+		size := make([]byte, 8)
+		binary.BigEndian.PutUint64(size, self.Length)
+		data = append(data, size...)
+		data = append(data, self.Payload...)
+	}
+
+	return data
+}
+
+func (self *Frame) Validate() (uint16, error) {
 	if !self.IsMasked {
 		return ProtocolError.UInt16(), errors.New("protocol error: unmasked client frame")
 	}
@@ -131,5 +160,5 @@ func (self *Frame) Validate(status uint16) (uint16, error) {
 		}
 	}
 
-	return status, nil
+	return NormalClosure.UInt16(), nil
 }
