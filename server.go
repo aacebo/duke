@@ -13,22 +13,24 @@ func Listen(r *http.ServeMux, cors func(origin string) bool) *Server {
 	self := Server{cors}
 
 	if r != nil {
-		r.HandleFunc("/ws", self.upgrade)
+		r.HandleFunc("/ws", self.onHandshake)
 	} else {
-		http.HandleFunc("/ws", self.upgrade)
+		http.HandleFunc("/ws", self.onHandshake)
 	}
 
 	return &self
 }
 
-func (self *Server) upgrade(w http.ResponseWriter, r *http.Request) {
+func (self *Server) onHandshake(w http.ResponseWriter, r *http.Request) {
 	socket, err := NewSocket(w, r)
+
 	if err != nil {
 		log.Println(err)
 		return
 	}
 
 	err = socket.Handshake()
+
 	if err != nil {
 		log.Println(err)
 		return
@@ -44,21 +46,17 @@ func (self *Server) upgrade(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		switch frame.Opcode {
-		case 8: // Close
+		if frame.IsClose() {
 			return
-		case 9: // Ping
-			frame.Opcode = 10
-			fallthrough
-		case 0: // Continuation
-			fallthrough
-		case 1: // Text
-			fallthrough
-		case 2: // Binary
-			if err = socket.Send(frame); err != nil {
-				log.Println("Error sending", err)
-				return
-			}
+		}
+
+		if frame.IsPing() {
+			frame.Pong()
+		}
+
+		if err = socket.Send(frame); err != nil {
+			log.Println("Error sending", err)
+			return
 		}
 	}
 }
