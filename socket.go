@@ -1,13 +1,9 @@
 package duke
 
 import (
-	"bufio"
 	"crypto/sha1"
 	"encoding/base64"
-	"encoding/binary"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"strings"
 
@@ -16,8 +12,7 @@ import (
 
 type Socket struct {
 	ID	   string
-	conn   net.Conn
-	io     *bufio.ReadWriter
+	io	   *Stream
 	header http.Header
 	status uint16
 }
@@ -38,15 +33,25 @@ func NewSocket(w http.ResponseWriter, req *http.Request) (*Socket, error) {
 
 	return &Socket{
 		uuid.NewString(),
-		conn,
-		io,
+		NewStream(conn, io),
 		req.Header,
 		1000,
 	}, nil
 }
 
+// Close sends close frame and closes the TCP connection
+func (self *Socket) Close() error {
+	f := NewCloseFrame(self.status)
+
+	if err := f.Write(); err != nil {
+		return err
+	}
+
+	return self.io.Close()
+}
+
 // Handshake performs the initial websocket handshake
-func (self *Socket) Handshake() error {
+func (self *Socket) handshake() error {
 	lines := []string{
 		"HTTP/1.1 101 Web Socket Protocol Handshake",
 		"Server: go/echoserver",
@@ -57,83 +62,42 @@ func (self *Socket) Handshake() error {
 		"", // required for extra CRLF
 	}
 
-	return self.write([]byte(strings.Join(lines, "\r\n")))
+	return self.io.Write([]byte(strings.Join(lines, "\r\n")))
 }
 
-// Recv receives data and returns a Frame
-func (self *Socket) Recv() (Frame, error) {
-	frame := Frame{}
-	head, err := self.read(2)
-
-	if err != nil {
-		return frame, err
-	}
-
-	frame.IsFragment = (head[0] & 0x80) == 0x00
-	frame.Opcode = head[0] & 0x0F
-	frame.Reserved = (head[0] & 0x70)
-	frame.IsMasked = (head[1] & 0x80) == 0x80
-	length := uint64(head[1] & 0x7F)
-
-	if length == 126 {
-		data, err := self.read(2)
+func (self *Socket) listen(fn func(frame *Frame)) error {
+	for {
+		frame, err := ReadNewFrame(self.io)
 
 		if err != nil {
-			return frame, err
+			return err
 		}
 
-		length = uint64(binary.BigEndian.Uint16(data))
-	} else if length == 127 {
-		data, err := self.read(8)
+		status, err := frame.Validate()
 
-		if err != nil {
-			return frame, err
+		if status != self.status {
+			self.status = status
 		}
 
-		length = uint64(binary.BigEndian.Uint64(data))
+		if err != nil || frame.IsClose() {
+			return err
+		}
+
+		if frame.IsPing() {
+			frame.Pong()
+		}
+
+		fn(frame)
 	}
-
-	mask, err := self.read(4)
-
-	if err != nil {
-		return frame, err
-	}
-
-	frame.Length = length
-	payload, err := self.read(int(length)) // possible data loss
-
-	if err != nil {
-		return frame, err
-	}
-
-	for i := uint64(0); i < length; i++ {
-		payload[i] ^= mask[i%4]
-	}
-
-	frame.Payload = payload
-	status, err := frame.Validate()
-
-	if status != self.status {
-		self.status = status
-	}
-
-	return frame, err
 }
 
 // Send sends a Frame
-func (self *Socket) Send(fr Frame) error {
-	return self.write(fr.Buffer())
+func (self *Socket) send(fr *Frame) error {
+	return self.io.Write(fr.Buffer())
 }
 
-// Close sends close frame and closes the TCP connection
-func (self *Socket) Close() error {
-	f := NewCloseFrame(self.status)
+func (self *Socket) Emit(payload string) error {
 
-	if err := self.Send(*f); err != nil {
-		return err
-	}
-
-	return self.conn.Close()
 }
 
 func (self *Socket) getAcceptHash() string {
@@ -141,41 +105,4 @@ func (self *Socket) getAcceptHash() string {
 	h.Write([]byte(self.header.Get("Sec-WebSocket-Key")))
 	h.Write([]byte("258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
-}
-
-func (self *Socket) write(data []byte) error {
-	if _, err := self.io.Write(data); err != nil {
-		return err
-	}
-
-	return self.io.Flush()
-}
-
-func (self *Socket) read(size int) ([]byte, error) {
-	data := make([]byte, 0)
-
-	for {
-		if len(data) == size {
-			break
-		}
-
-		// Temporary slice to read chunk
-		sz := 4096
-		remaining := size - len(data)
-
-		if sz > remaining {
-			sz = remaining
-		}
-
-		temp := make([]byte, sz)
-		n, err := self.io.Read(temp)
-
-		if err != nil && err != io.EOF {
-			return data, err
-		}
-
-		data = append(data, temp[:n]...)
-	}
-
-	return data, nil
 }

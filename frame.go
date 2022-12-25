@@ -3,6 +3,7 @@ package duke
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -16,6 +17,11 @@ type Frame struct {
 	IsMasked   bool
 	Length     uint64
 	Payload    []byte
+	io 		   *Stream
+}
+
+func NewTextFrame(payload string) {
+
 }
 
 func NewCloseFrame(status uint16) *Frame {
@@ -27,6 +33,62 @@ func NewCloseFrame(status uint16) *Frame {
 
 	binary.BigEndian.PutUint16(v.Payload, status)
 	return &v
+}
+
+func ReadNewFrame(io *Stream) (*Frame, error) {
+	head, err := io.Read(2)
+
+	if err != nil {
+		return nil, err
+	}
+
+	v := Frame{
+		IsFragment: (head[0] & 0x80) == 0x00,
+		Opcode: head[0] & 0x0F,
+		Reserved: (head[0] & 0x70),
+		IsMasked: (head[1] & 0x80) == 0x80,
+		io: io,
+	}
+
+	length := uint64(head[1] & 0x7F)
+
+	if length == 126 {
+		data, err := io.Read(2)
+
+		if err != nil {
+			return nil, err
+		}
+
+		length = uint64(binary.BigEndian.Uint16(data))
+	} else if length == 127 {
+		data, err := io.Read(8)
+
+		if err != nil {
+			return nil, err
+		}
+
+		length = uint64(binary.BigEndian.Uint64(data))
+	}
+
+	mask, err := io.Read(4)
+
+	if err != nil {
+		return nil, err
+	}
+
+	v.Length = length
+	payload, err := io.Read(int(length)) // possible data loss
+
+	if err != nil {
+		return nil, err
+	}
+
+	for i := uint64(0); i < length; i++ {
+		payload[i] ^= mask[i%4]
+	}
+
+	v.Payload = payload
+	return &v, nil
 }
 
 func (self *Frame) Ping() *Frame {
@@ -42,6 +104,16 @@ func (self *Frame) Pong() *Frame {
 // Get Text Payload
 func (self *Frame) String() string {
 	return string(self.Payload)
+}
+
+func (self *Frame) JSON() (map[string]interface{}, error) {
+	v := make(map[string]interface{})
+
+	if err := json.Unmarshal(self.Payload, &v); err != nil {
+		return nil, err
+	}
+
+	return v, nil
 }
 
 func (self *Frame) Code() uint16 {
@@ -121,6 +193,10 @@ func (self *Frame) Buffer() []byte {
 	}
 
 	return data
+}
+
+func (self *Frame) Write() error {
+	return self.io.Write(self.Buffer())
 }
 
 func (self *Frame) Validate() (uint16, error) {

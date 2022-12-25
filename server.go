@@ -1,17 +1,18 @@
 package duke
 
 import (
-	"log"
 	"net/http"
 )
 
 type Server struct {
 	listeners map[string]func(socket *Socket)
+	sockets   map[string]*Socket
 }
 
-func New(r *http.ServeMux) *Server {
+func NewServer(r *http.ServeMux) *Server {
 	self := Server{
 		listeners: make(map[string]func(socket *Socket)),
+		sockets: make(map[string]*Socket),
 	}
 
 	if r != nil {
@@ -27,46 +28,45 @@ func (self *Server) On(event string, fn func(socket *Socket)) {
 	self.listeners[event] = fn
 }
 
+func (self *Server) GetSocket(id string) *Socket {
+	return self.sockets[id]
+}
+
 func (self *Server) onHandshake(w http.ResponseWriter, r *http.Request) {
 	socket, err := NewSocket(w, r)
 
 	if err != nil {
-		log.Println(err)
 		return
 	}
 
-	err = socket.Handshake()
+	err = socket.handshake()
 
 	if err != nil {
-		log.Println(err)
 		return
 	}
 
-	defer socket.Close()
+	defer self.onDisconnect(socket)
+	self.onConnect(socket)
+	socket.listen(func(frame *Frame) {
+		if err = socket.send(frame); err != nil {
+			return
+		}
+	})
+}
 
-	if self.listeners["connection"] != nil {
-		self.listeners["connection"](socket)
+func (self *Server) onConnect(socket *Socket) {
+	self.sockets[socket.ID] = socket
+
+	if self.listeners["connect"] != nil {
+		self.listeners["connect"](socket)
 	}
+}
 
-	for {
-		frame, err := socket.Recv()
+func (self *Server) onDisconnect(socket *Socket) {
+	socket.Close()
+	delete(self.sockets, socket.ID)
 
-		if err != nil {
-			log.Println("Error Decoding", err)
-			return
-		}
-
-		if frame.IsClose() {
-			return
-		}
-
-		if frame.IsPing() {
-			frame.Pong()
-		}
-
-		if err = socket.Send(frame); err != nil {
-			log.Println("Error sending", err)
-			return
-		}
+	if self.listeners["disconnect"] != nil {
+		self.listeners["disconnect"](socket)
 	}
 }

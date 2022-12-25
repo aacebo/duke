@@ -7,9 +7,13 @@ import (
 )
 
 func main() {
-	ws := duke.New(nil)
-	ws.On("connection", func(socket *duke.Socket) {
-		fmt.Println(socket.ID)
+	ws := duke.NewServer(nil)
+	ws.On("connect", func(socket *duke.Socket) {
+		fmt.Println(socket.ID + " connected")
+	})
+
+	ws.On("disconnect", func(socket *duke.Socket) {
+		fmt.Println(socket.ID + " disconnected")
 	})
 
 	http.ListenAndServe(":3000", nil)
