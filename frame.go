@@ -17,11 +17,17 @@ type Frame struct {
 	IsMasked   bool
 	Length     uint64
 	Payload    []byte
-	io 		   *Stream
 }
 
-func NewTextFrame(payload string) {
+func NewFrame(payload string) *Frame {
+	v := Frame{
+		Opcode: 1,
+		Length: uint64(utf8.RuneCountInString(payload)),
+		Reserved: 0,
+		Payload: []byte(payload),
+	}
 
+	return &v
 }
 
 func NewCloseFrame(status uint16) *Frame {
@@ -47,7 +53,6 @@ func ReadNewFrame(io *Stream) (*Frame, error) {
 		Opcode: head[0] & 0x0F,
 		Reserved: (head[0] & 0x70),
 		IsMasked: (head[1] & 0x80) == 0x80,
-		io: io,
 	}
 
 	length := uint64(head[1] & 0x7F)
@@ -193,10 +198,6 @@ func (self *Frame) Buffer() []byte {
 	}
 
 	return data
-}
-
-func (self *Frame) Write() error {
-	return self.io.Write(self.Buffer())
 }
 
 func (self *Frame) Validate() (uint16, error) {

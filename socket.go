@@ -43,29 +43,14 @@ func NewSocket(w http.ResponseWriter, req *http.Request) (*Socket, error) {
 func (self *Socket) Close() error {
 	f := NewCloseFrame(self.status)
 
-	if err := f.Write(); err != nil {
+	if err := self.io.Write(f.Buffer()); err != nil {
 		return err
 	}
 
 	return self.io.Close()
 }
 
-// Handshake performs the initial websocket handshake
-func (self *Socket) handshake() error {
-	lines := []string{
-		"HTTP/1.1 101 Web Socket Protocol Handshake",
-		"Server: go/echoserver",
-		"Upgrade: WebSocket",
-		"Connection: Upgrade",
-		"Sec-WebSocket-Accept: " + self.getAcceptHash(),
-		"", // required for extra CRLF
-		"", // required for extra CRLF
-	}
-
-	return self.io.Write([]byte(strings.Join(lines, "\r\n")))
-}
-
-func (self *Socket) listen(fn func(frame *Frame)) error {
+func (self *Socket) Listen(fn func(frame *Frame)) error {
 	for {
 		frame, err := ReadNewFrame(self.io)
 
@@ -91,13 +76,24 @@ func (self *Socket) listen(fn func(frame *Frame)) error {
 	}
 }
 
-// Send sends a Frame
-func (self *Socket) send(fr *Frame) error {
-	return self.io.Write(fr.Buffer())
+func (self *Socket) Emit(payload string) error {
+	f := NewFrame(payload)
+	return self.io.Write(f.Buffer())
 }
 
-func (self *Socket) Emit(payload string) error {
+// Handshake performs the initial websocket handshake
+func (self *Socket) handshake() error {
+	lines := []string{
+		"HTTP/1.1 101 Web Socket Protocol Handshake",
+		"Server: go/echoserver",
+		"Upgrade: WebSocket",
+		"Connection: Upgrade",
+		"Sec-WebSocket-Accept: " + self.getAcceptHash(),
+		"", // required for extra CRLF
+		"", // required for extra CRLF
+	}
 
+	return self.io.Write([]byte(strings.Join(lines, "\r\n")))
 }
 
 func (self *Socket) getAcceptHash() string {

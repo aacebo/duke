@@ -47,11 +47,6 @@ func (self *Server) onHandshake(w http.ResponseWriter, r *http.Request) {
 
 	defer self.onDisconnect(socket)
 	self.onConnect(socket)
-	socket.listen(func(frame *Frame) {
-		if err = socket.send(frame); err != nil {
-			return
-		}
-	})
 }
 
 func (self *Server) onConnect(socket *Socket) {
